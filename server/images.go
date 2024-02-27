@@ -373,6 +373,7 @@ func CreateModel(ctx context.Context, name, modelFileDir string, commands []pars
 				layers.Add(layer)
 
 				metadata := map[string]any{
+					"ref":    layer.Digest,
 					"kv":     ggml.KV(),
 					"tensor": ggml.Tensor(),
 				}
@@ -413,7 +414,8 @@ func CreateModel(ctx context.Context, name, modelFileDir string, commands []pars
 				return err
 			}
 
-			layer, err := NewLayer(bin, mediatype)
+			sr := io.NewSectionReader(bin, 0, ggml.Size)
+			layer, err := NewLayer(sr, mediatype)
 			if err != nil {
 				return err
 			}
@@ -421,6 +423,7 @@ func CreateModel(ctx context.Context, name, modelFileDir string, commands []pars
 			layers.Add(layer)
 
 			metadata := map[string]any{
+				"ref":    layer.Digest,
 				"kv":     ggml.KV(),
 				"tensor": ggml.Tensor(),
 			}

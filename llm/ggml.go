@@ -158,7 +158,7 @@ type tensor struct {
 	Kind uint32 `json:"kind"`
 
 	// Shape is the number of elements in each dimension
-	Shape [4]uint64 `json:"shape"`
+	Shape []uint64 `json:"shape"`
 
 	offset uint64
 }
@@ -218,7 +218,12 @@ func (t tensor) typeSize() uint64 {
 }
 
 func (t tensor) parameters() uint64 {
-	return t.Shape[0] * t.Shape[1] * t.Shape[2] * t.Shape[3]
+	var count uint64 = 1
+	for _, n := range t.Shape {
+		count *= n
+	}
+
+	return count
 }
 
 func (t tensor) size() uint64 {
@@ -274,7 +279,9 @@ func DecodeGGML(r io.ReadSeeker) (*GGML, error) {
 	}
 
 	model, err := c.Decode(&ro)
-	if err != nil {
+	if errors.Is(err, io.EOF) {
+		// noop
+	} else if err != nil {
 		return nil, err
 	}
 

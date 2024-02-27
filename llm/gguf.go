@@ -37,12 +37,9 @@ func (c *containerGGUF) Decode(rso *readSeekOffset) (model, error) {
 		binary.Read(rso, c.bo, &c.V2)
 	}
 
-	model := newGGUFModel(c)
-	if err := model.Decode(rso); err != nil {
-		return nil, err
-	}
-
-	return model, nil
+	model := newModelGGUF(c)
+	err := model.decode(rso)
+	return model, err
 }
 
 const (
@@ -61,7 +58,7 @@ const (
 	ggufTypeFloat64
 )
 
-type ggufModel struct {
+type modelGGUF struct {
 	*containerGGUF
 
 	kv
@@ -70,22 +67,22 @@ type ggufModel struct {
 	parameters uint64
 }
 
-func newGGUFModel(container *containerGGUF) *ggufModel {
-	return &ggufModel{
+func newModelGGUF(container *containerGGUF) *modelGGUF {
+	return &modelGGUF{
 		containerGGUF: container,
 		kv:            make(kv),
 	}
 }
 
-func (llm *ggufModel) KV() kv {
+func (llm *modelGGUF) KV() kv {
 	return llm.kv
 }
 
-func (llm *ggufModel) Tensor() []tensor {
+func (llm *modelGGUF) Tensor() []tensor {
 	return llm.tensors
 }
 
-func (llm *ggufModel) NumTensor() uint64 {
+func (llm *modelGGUF) NumTensor() uint64 {
 	if llm.Version == 1 {
 		return uint64(llm.V1.NumTensor)
 	}
@@ -93,7 +90,7 @@ func (llm *ggufModel) NumTensor() uint64 {
 	return llm.V2.NumTensor
 }
 
-func (llm *ggufModel) NumKV() uint64 {
+func (llm *modelGGUF) NumKV() uint64 {
 	if llm.Version == 1 {
 		return uint64(llm.V1.NumKV)
 	}
@@ -101,7 +98,7 @@ func (llm *ggufModel) NumKV() uint64 {
 	return llm.V2.NumKV
 }
 
-func (llm *ggufModel) Decode(rso *readSeekOffset) error {
+func (llm *modelGGUF) decode(rso *readSeekOffset) error {
 	// decode key-values
 	for i := 0; uint64(i) < llm.NumKV(); i++ {
 		k, err := llm.readString(rso)
@@ -168,7 +165,7 @@ func (llm *ggufModel) Decode(rso *readSeekOffset) error {
 		// dims is the number of dimensions in the tensor
 		dims := llm.readU32(rso)
 
-		shape := [4]uint64{1, 1, 1, 1}
+		shape := make([]uint64, dims)
 		for i := 0; uint32(i) < dims; i++ {
 			shape[i] = llm.readU64(rso)
 		}
@@ -201,73 +198,73 @@ func (llm *ggufModel) Decode(rso *readSeekOffset) error {
 	return nil
 }
 
-func (llm ggufModel) readU8(r io.Reader) uint8 {
+func (llm modelGGUF) readU8(r io.Reader) uint8 {
 	var u8 uint8
 	binary.Read(r, llm.bo, &u8)
 	return u8
 }
 
-func (llm ggufModel) readI8(r io.Reader) int8 {
+func (llm modelGGUF) readI8(r io.Reader) int8 {
 	var i8 int8
 	binary.Read(r, llm.bo, &i8)
 	return i8
 }
 
-func (llm ggufModel) readU16(r io.Reader) uint16 {
+func (llm modelGGUF) readU16(r io.Reader) uint16 {
 	var u16 uint16
 	binary.Read(r, llm.bo, &u16)
 	return u16
 }
 
-func (llm ggufModel) readI16(r io.Reader) int16 {
+func (llm modelGGUF) readI16(r io.Reader) int16 {
 	var i16 int16
 	binary.Read(r, llm.bo, &i16)
 	return i16
 }
 
-func (llm ggufModel) readU32(r io.Reader) uint32 {
+func (llm modelGGUF) readU32(r io.Reader) uint32 {
 	var u32 uint32
 	binary.Read(r, llm.bo, &u32)
 	return u32
 }
 
-func (llm ggufModel) readI32(r io.Reader) int32 {
+func (llm modelGGUF) readI32(r io.Reader) int32 {
 	var i32 int32
 	binary.Read(r, llm.bo, &i32)
 	return i32
 }
 
-func (llm ggufModel) readU64(r io.Reader) uint64 {
+func (llm modelGGUF) readU64(r io.Reader) uint64 {
 	var u64 uint64
 	binary.Read(r, llm.bo, &u64)
 	return u64
 }
 
-func (llm ggufModel) readI64(r io.Reader) int64 {
+func (llm modelGGUF) readI64(r io.Reader) int64 {
 	var i64 int64
 	binary.Read(r, llm.bo, &i64)
 	return i64
 }
 
-func (llm ggufModel) readF32(r io.Reader) float32 {
+func (llm modelGGUF) readF32(r io.Reader) float32 {
 	var f32 float32
 	binary.Read(r, llm.bo, &f32)
 	return f32
 }
 
-func (llm ggufModel) readF64(r io.Reader) float64 {
+func (llm modelGGUF) readF64(r io.Reader) float64 {
 	var f64 float64
 	binary.Read(r, llm.bo, &f64)
 	return f64
 }
 
-func (llm ggufModel) readBool(r io.Reader) bool {
+func (llm modelGGUF) readBool(r io.Reader) bool {
 	var b bool
 	binary.Read(r, llm.bo, &b)
 	return b
 }
 
-func (llm ggufModel) readStringV1(r io.Reader) (string, error) {
+func (llm modelGGUF) readStringV1(r io.Reader) (string, error) {
 	var nameLength uint32
 	binary.Read(r, llm.bo, &nameLength)
 
@@ -282,7 +279,7 @@ func (llm ggufModel) readStringV1(r io.Reader) (string, error) {
 	return b.String(), nil
 }
 
-func (llm ggufModel) readString(r io.Reader) (string, error) {
+func (llm modelGGUF) readString(r io.Reader) (string, error) {
 	if llm.Version == 1 {
 		return llm.readStringV1(r)
 	}
@@ -298,7 +295,7 @@ func (llm ggufModel) readString(r io.Reader) (string, error) {
 	return b.String(), nil
 }
 
-func (llm *ggufModel) readArrayV1(r io.Reader) (arr []any, err error) {
+func (llm *modelGGUF) readArrayV1(r io.Reader) (arr []any, err error) {
 	atype := llm.readU32(r)
 	n := llm.readU32(r)
 
@@ -335,7 +332,7 @@ func (llm *ggufModel) readArrayV1(r io.Reader) (arr []any, err error) {
 	return
 }
 
-func (llm *ggufModel) readArray(r io.Reader) (arr []any, err error) {
+func (llm *modelGGUF) readArray(r io.Reader) (arr []any, err error) {
 	if llm.Version == 1 {
 		return llm.readArrayV1(r)
 	}
