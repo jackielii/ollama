@@ -3,6 +3,7 @@ package llm
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -89,47 +90,149 @@ func fileType(fileType uint32) string {
 	}
 }
 
+type kv map[string]any
+
+func (kv kv) u64(key string) uint64 {
+	switch v := kv[key].(type) {
+	case uint64:
+		return v
+	case uint32:
+		return uint64(v)
+	case float64:
+		return uint64(v)
+	default:
+		return 0
+	}
+}
+
+func (kv kv) Architecture() string {
+	if s, ok := kv["general.architecture"].(string); ok {
+		return s
+	}
+
+	return "unknown"
+}
+
+func (kv kv) ParameterCount() uint64 {
+	return kv.u64("general.parameter_count")
+}
+
+func (kv kv) FileType() string {
+	if u64 := kv.u64("general.file_type"); u64 > 0 {
+		return fileType(uint32(u64))
+	}
+
+	return "unknown"
+}
+
+func (kv kv) BlockCount() uint64 {
+	return kv.u64(fmt.Sprintf("%s.block_count", kv.Architecture()))
+}
+
+func (kv kv) HeadCount() uint64 {
+	return kv.u64(fmt.Sprintf("%s.attention.head_count", kv.Architecture()))
+}
+
+func (kv kv) HeadCountKV() uint64 {
+	return kv.u64(fmt.Sprintf("%s.attention.head_count_kv", kv.Architecture()))
+}
+
+func (kv kv) GQA() uint64 {
+	if headCountKV := kv.HeadCountKV(); headCountKV > 0 {
+		return kv.HeadCount() / headCountKV
+	}
+
+	return 0
+}
+
+func (kv kv) EmbeddingLength() uint64 {
+	return kv.u64(fmt.Sprintf("%s.embedding_length", kv.Architecture()))
+}
+
+func (kv kv) ContextLength() uint64 {
+	return kv.u64(fmt.Sprintf("%s.embedding_length", kv.Architecture()))
+}
+
+type tensor struct {
+	Name string `json:"name"`
+	Kind uint32 `json:"kind"`
+
+	// Shape is the number of elements in each dimension
+	Shape [4]uint64 `json:"shape"`
+
+	offset uint64
+}
+
+func (t tensor) blockSize() uint64 {
+	switch {
+	case t.Kind < 2:
+		return 1
+	case t.Kind < 10:
+		return 32
+	default:
+		return 256
+	}
+}
+
+func (t tensor) typeSize() uint64 {
+	blockSize := t.blockSize()
+
+	switch t.Kind {
+	case 0: // FP32
+		return 4
+	case 1: // FP16
+		return 2
+	case 2: // Q4_0
+		return 2 + blockSize/2
+	case 3: // Q4_1
+		return 2 + 2 + blockSize/2
+	case 6: // Q5_0
+		return 2 + 4 + blockSize/2
+	case 7: // Q5_1
+		return 2 + 2 + 4 + blockSize/2
+	case 8: // Q8_0
+		return 2 + blockSize
+	case 9: // Q8_1
+		return 4 + 4 + blockSize
+	case 10: // Q2_K
+		return blockSize/16 + blockSize/4 + 2 + 2
+	case 11: // Q3_K
+		return blockSize/8 + blockSize/4 + 12 + 2
+	case 12: // Q4_K
+		return 2 + 2 + 12 + blockSize/2
+	case 13: // Q5_K
+		return 2 + 2 + 12 + blockSize/8 + blockSize/2
+	case 14: // Q6_K
+		return blockSize/2 + blockSize/4 + blockSize/16 + 2
+	case 15: // Q8_K
+		return 2 + blockSize + 2*blockSize/16
+	case 16: // IQ2_XXS
+		return 2 + 2*blockSize/8
+	case 17: // IQ2_XS
+		return 2 + 2*blockSize/8 + blockSize/32
+	case 18: // IQ3_XXS
+		return 2 + 3*blockSize/8
+	default:
+		return 0
+	}
+}
+
+func (t tensor) parameters() uint64 {
+	return t.Shape[0] * t.Shape[1] * t.Shape[2] * t.Shape[3]
+}
+
+func (t tensor) size() uint64 {
+	return t.parameters() * t.typeSize() / t.blockSize()
+}
+
 type model interface {
-	ModelFamily() string
-	ModelType() string
-	FileType() string
-	NumLayers() uint32
-	NumGQA() uint32
-	NumEmbed() uint32
-	NumHead() uint32
-	NumHeadKv() uint32
-	NumCtx() uint32
+	KV() kv
+	Tensor() []tensor
 }
 
 type container interface {
 	Name() string
 	Decode(*readSeekOffset) (model, error)
-}
-
-type containerLORA struct {
-	version uint32
-}
-
-func (c *containerLORA) Name() string {
-	return "ggla"
-}
-
-func (c *containerLORA) Decode(rso *readSeekOffset) (model, error) {
-	var version uint32
-	binary.Read(rso, binary.LittleEndian, &version)
-
-	switch version {
-	case 1:
-	default:
-		return nil, errors.New("invalid version")
-	}
-
-	c.version = version
-
-	// remaining file contents aren't decoded
-	rso.Seek(0, io.SeekEnd)
-
-	return nil, nil
 }
 
 const (
@@ -161,7 +264,7 @@ func DecodeGGML(r io.ReadSeeker) (*GGML, error) {
 	case FILE_MAGIC_GGML, FILE_MAGIC_GGMF, FILE_MAGIC_GGJT:
 		return nil, ErrUnsupportedFormat
 	case FILE_MAGIC_GGLA:
-		c = &containerLORA{}
+		c = &containerGGLA{}
 	case FILE_MAGIC_GGUF_LE:
 		c = &containerGGUF{bo: binary.LittleEndian}
 	case FILE_MAGIC_GGUF_BE:

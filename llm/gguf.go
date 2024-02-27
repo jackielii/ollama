@@ -5,8 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-
-	"github.com/jmorganca/ollama/format"
 )
 
 type containerGGUF struct {
@@ -63,79 +61,6 @@ const (
 	ggufTypeFloat64
 )
 
-type kv map[string]any
-
-type tensor struct {
-	name   string
-	kind   uint32
-	offset uint64
-
-	// shape is the number of elements in each dimension
-	shape [4]uint64
-}
-
-func (t tensor) blockSize() uint64 {
-	switch {
-	case t.kind < 2:
-		return 1
-	case t.kind < 10:
-		return 32
-	default:
-		return 256
-	}
-}
-
-func (t tensor) typeSize() uint64 {
-	blockSize := t.blockSize()
-
-	switch t.kind {
-	case 0: // FP32
-		return 4
-	case 1: // FP16
-		return 2
-	case 2: // Q4_0
-		return 2 + blockSize/2
-	case 3: // Q4_1
-		return 2 + 2 + blockSize/2
-	case 6: // Q5_0
-		return 2 + 4 + blockSize/2
-	case 7: // Q5_1
-		return 2 + 2 + 4 + blockSize/2
-	case 8: // Q8_0
-		return 2 + blockSize
-	case 9: // Q8_1
-		return 4 + 4 + blockSize
-	case 10: // Q2_K
-		return blockSize/16 + blockSize/4 + 2 + 2
-	case 11: // Q3_K
-		return blockSize/8 + blockSize/4 + 12 + 2
-	case 12: // Q4_K
-		return 2 + 2 + 12 + blockSize/2
-	case 13: // Q5_K
-		return 2 + 2 + 12 + blockSize/8 + blockSize/2
-	case 14: // Q6_K
-		return blockSize/2 + blockSize/4 + blockSize/16 + 2
-	case 15: // Q8_K
-		return 2 + blockSize + 2*blockSize/16
-	case 16: // IQ2_XXS
-		return 2 + 2*blockSize/8
-	case 17: // IQ2_XS
-		return 2 + 2*blockSize/8 + blockSize/32
-	case 18: // IQ3_XXS
-		return 2 + 3*blockSize/8
-	default:
-		return 0
-	}
-}
-
-func (t tensor) parameters() uint64 {
-	return t.shape[0] * t.shape[1] * t.shape[2] * t.shape[3]
-}
-
-func (t tensor) size() uint64 {
-	return t.parameters() * t.typeSize() / t.blockSize()
-}
-
 type ggufModel struct {
 	*containerGGUF
 
@@ -152,6 +77,14 @@ func newGGUFModel(container *containerGGUF) *ggufModel {
 	}
 }
 
+func (llm *ggufModel) KV() kv {
+	return llm.kv
+}
+
+func (llm *ggufModel) Tensor() []tensor {
+	return llm.tensors
+}
+
 func (llm *ggufModel) NumTensor() uint64 {
 	if llm.Version == 1 {
 		return uint64(llm.V1.NumTensor)
@@ -166,30 +99,6 @@ func (llm *ggufModel) NumKV() uint64 {
 	}
 
 	return llm.V2.NumKV
-}
-
-func (llm *ggufModel) ModelFamily() string {
-	if t, ok := llm.kv["general.architecture"].(string); ok {
-		return t
-	}
-
-	return "unknown"
-}
-
-func (llm *ggufModel) ModelType() string {
-	if llm.parameters > 0 {
-		return format.HumanNumber(llm.parameters)
-	}
-
-	return "unknown"
-}
-
-func (llm *ggufModel) FileType() string {
-	if t, ok := llm.kv["general.file_type"].(uint32); ok {
-		return fileType(t)
-	}
-
-	return "unknown"
 }
 
 func (llm *ggufModel) Decode(rso *readSeekOffset) error {
@@ -244,7 +153,9 @@ func (llm *ggufModel) Decode(rso *readSeekOffset) error {
 			return fmt.Errorf("invalid type: %d", vtype)
 		}
 
-		llm.kv[k] = v
+		if vtype != ggufTypeArray && k != "tokenizer.chat_template" {
+			llm.kv[k] = v
+		}
 	}
 
 	// decode tensors
@@ -263,15 +174,18 @@ func (llm *ggufModel) Decode(rso *readSeekOffset) error {
 		}
 
 		tensor := tensor{
-			name:   name,
-			kind:   llm.readU32(rso),
+			Name:   name,
+			Kind:   llm.readU32(rso),
 			offset: llm.readU64(rso),
-			shape:  shape,
+			Shape:  shape,
 		}
 
 		llm.tensors = append(llm.tensors, tensor)
 		llm.parameters += tensor.parameters()
 	}
+
+	// patch KV with parameter count
+	llm.kv["general.parameter_count"] = llm.parameters
 
 	alignment, ok := llm.kv["general.alignment"].(uint32)
 	if !ok {
@@ -285,60 +199,6 @@ func (llm *ggufModel) Decode(rso *readSeekOffset) error {
 	}
 
 	return nil
-}
-
-func (llm *ggufModel) NumLayers() uint32 {
-	value, exists := llm.kv[fmt.Sprintf("%s.block_count", llm.ModelFamily())]
-	if !exists {
-		return 0
-	}
-
-	return value.(uint32)
-}
-
-func (llm *ggufModel) NumHead() uint32 {
-	value, exists := llm.kv[fmt.Sprintf("%s.attention.head_count", llm.ModelFamily())]
-	if !exists {
-		return 0
-	}
-
-	return value.(uint32)
-}
-
-func (llm *ggufModel) NumEmbed() uint32 {
-	value, exists := llm.kv[fmt.Sprintf("%s.embedding_length", llm.ModelFamily())]
-	if !exists {
-		return 0
-	}
-
-	return value.(uint32)
-}
-
-func (llm *ggufModel) NumHeadKv() uint32 {
-	value, exists := llm.kv[fmt.Sprintf("%s.attention.head_count_kv", llm.ModelFamily())]
-	if !exists {
-		return 0
-	}
-
-	return value.(uint32)
-}
-
-func (llm *ggufModel) NumCtx() uint32 {
-	value, exists := llm.kv[fmt.Sprintf("%s.context_length", llm.ModelFamily())]
-	if !exists {
-		return 0
-	}
-
-	return value.(uint32)
-}
-
-func (llm *ggufModel) NumGQA() uint32 {
-	numHeadKv := llm.NumHeadKv()
-	if numHeadKv == 0 {
-		return 0
-	}
-
-	return llm.NumHead() / numHeadKv
 }
 
 func (llm ggufModel) readU8(r io.Reader) uint8 {

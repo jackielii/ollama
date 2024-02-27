@@ -20,8 +20,6 @@ import (
 	"strings"
 	"text/template"
 
-	"golang.org/x/exp/slices"
-
 	"github.com/jmorganca/ollama/api"
 	"github.com/jmorganca/ollama/llm"
 	"github.com/jmorganca/ollama/parser"
@@ -53,7 +51,7 @@ type Model struct {
 }
 
 func (m *Model) IsEmbedding() bool {
-	return slices.Contains(m.Config.ModelFamilies, "bert") || slices.Contains(m.Config.ModelFamilies, "nomic-bert")
+	return false
 }
 
 type Message struct {
@@ -69,46 +67,10 @@ type ManifestV2 struct {
 }
 
 type ConfigV2 struct {
-	ModelFormat   string   `json:"model_format"`
-	ModelFamily   string   `json:"model_family"`
-	ModelFamilies []string `json:"model_families"`
-	ModelType     string   `json:"model_type"`
-	FileType      string   `json:"file_type"`
-
 	// required by spec
 	Architecture string `json:"architecture"`
 	OS           string `json:"os"`
 	RootFS       RootFS `json:"rootfs"`
-}
-
-func (c *ConfigV2) SetModelFormat(format string) {
-	if c.ModelFormat == "" {
-		c.ModelFormat = format
-	}
-}
-
-func (c *ConfigV2) SetModelFamily(families ...string) {
-	for _, family := range families {
-		if c.ModelFamily == "" {
-			c.ModelFamily = family
-		}
-
-		if !slices.Contains(c.ModelFamilies, family) {
-			c.ModelFamilies = append(c.ModelFamilies, family)
-		}
-	}
-}
-
-func (c *ConfigV2) SetModelType(modelType string) {
-	if c.ModelType == "" {
-		c.ModelType = modelType
-	}
-}
-
-func (c *ConfigV2) SetFileType(fileType string) {
-	if c.FileType == "" {
-		c.FileType = fileType
-	}
 }
 
 type RootFS struct {
@@ -352,17 +314,6 @@ func CreateModel(ctx context.Context, name, modelFileDir string, commands []pars
 				if err := json.NewDecoder(fromConfigFile).Decode(&fromConfig); err != nil {
 					return err
 				}
-
-				// if the model is still not in gguf format, error out
-				if fromConfig.ModelFormat != "gguf" {
-					return fmt.Errorf("%s is not in gguf format, this base model is not compatible with this version of ollama", c.Args)
-				}
-
-				config.SetModelFormat(fromConfig.ModelFormat)
-				config.SetModelFamily(append(fromConfig.ModelFamilies, fromConfig.ModelFamily)...)
-				config.SetModelType(fromConfig.ModelType)
-				config.SetFileType(fromConfig.FileType)
-
 				for _, layer := range manifest.Layers {
 					deleteMap[layer.Digest] = struct{}{}
 					if layer.MediaType == "application/vnd.ollama.image.params" {
@@ -396,35 +347,42 @@ func CreateModel(ctx context.Context, name, modelFileDir string, commands []pars
 			defer bin.Close()
 
 			var offset int64
-		CREATE:
 			for {
 				fn(api.ProgressResponse{Status: "creating model layer"})
 
 				bin.Seek(offset, io.SeekStart)
 				ggml, err := llm.DecodeGGML(bin)
-				if err != nil {
-					switch {
-					case errors.Is(err, io.EOF):
-						break CREATE
-					case errors.Is(err, llm.ErrUnsupportedFormat):
-						return fmt.Errorf("model binary specified in FROM field is not a valid gguf format model, %w", err)
-					default:
-						return err
-					}
+				if errors.Is(err, io.EOF) {
+					break
+				} else if errors.Is(err, llm.ErrUnsupportedFormat) {
+					return fmt.Errorf("model binary specified in FROM field is not a valid gguf format model, %w", err)
+				} else if err != nil {
+					return err
 				}
 
-				config.SetModelFormat(ggml.Name())
-				config.SetModelFamily(ggml.ModelFamily())
-				config.SetModelType(ggml.ModelType())
-				config.SetFileType(ggml.FileType())
-
-				mediatype := mediatype
-				if ggml.ModelFamily() == "clip" {
+				if ggml.KV().Architecture() == "clip" {
 					mediatype = "application/vnd.ollama.image.projector"
 				}
 
 				sr := io.NewSectionReader(bin, offset, ggml.Size)
 				layer, err := NewLayer(sr, mediatype)
+				if err != nil {
+					return err
+				}
+
+				layers.Add(layer)
+
+				metadata := map[string]any{
+					"kv":     ggml.KV(),
+					"tensor": ggml.Tensor(),
+				}
+
+				var b bytes.Buffer
+				if err := json.NewEncoder(&b).Encode(metadata); err != nil {
+					return err
+				}
+
+				layer, err = NewLayer(&b, fmt.Sprintf("%s+json", mediatype))
 				if err != nil {
 					return err
 				}
@@ -450,7 +408,29 @@ func CreateModel(ctx context.Context, name, modelFileDir string, commands []pars
 			}
 			defer bin.Close()
 
+			ggml, err := llm.DecodeGGML(bin)
+			if err != nil {
+				return err
+			}
+
 			layer, err := NewLayer(bin, mediatype)
+			if err != nil {
+				return err
+			}
+
+			layers.Add(layer)
+
+			metadata := map[string]any{
+				"kv":     ggml.KV(),
+				"tensor": ggml.Tensor(),
+			}
+
+			var b bytes.Buffer
+			if err := json.NewEncoder(&b).Encode(metadata); err != nil {
+				return err
+			}
+
+			layer, err = NewLayer(&b, "application/vnd.ollama.image.adapter+json")
 			if err != nil {
 				return err
 			}
@@ -518,13 +498,6 @@ func CreateModel(ctx context.Context, name, modelFileDir string, commands []pars
 		for k, v := range fromParams {
 			if _, ok := formattedParams[k]; !ok {
 				formattedParams[k] = v
-			}
-		}
-
-		// xxx - can this be removed?
-		if config.ModelType == "65B" {
-			if gqa, ok := formattedParams["gqa"].(int); ok && gqa == 8 {
-				config.ModelType = "70B"
 			}
 		}
 
