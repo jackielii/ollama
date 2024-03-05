@@ -32,14 +32,14 @@ func (c *containerGGLA) Decode(rso *readSeekOffset) (model, error) {
 type modelGGLA struct {
 	*containerGGLA
 
-	kv
+	kv      KV
 	tensors []tensor
 }
 
 func newModelGGLA(container *containerGGLA) *modelGGLA {
 	return &modelGGLA{
 		containerGGLA: container,
-		kv:            make(kv),
+		kv:            make(KV),
 	}
 }
 
@@ -107,7 +107,7 @@ func (m *modelGGLA) decode(rso *readSeekOffset) error {
 	}
 }
 
-func (m *modelGGLA) KV() kv {
+func (m *modelGGLA) KV() KV {
 	return m.kv
 }
 

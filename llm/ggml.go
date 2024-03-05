@@ -90,9 +90,9 @@ func fileType(fileType uint32) string {
 	}
 }
 
-type kv map[string]any
+type KV map[string]any
 
-func (kv kv) u64(key string) uint64 {
+func (kv KV) u64(key string) uint64 {
 	switch v := kv[key].(type) {
 	case uint64:
 		return v
@@ -105,7 +105,7 @@ func (kv kv) u64(key string) uint64 {
 	}
 }
 
-func (kv kv) Architecture() string {
+func (kv KV) Architecture() string {
 	if s, ok := kv["general.architecture"].(string); ok {
 		return s
 	}
@@ -113,11 +113,11 @@ func (kv kv) Architecture() string {
 	return "unknown"
 }
 
-func (kv kv) ParameterCount() uint64 {
+func (kv KV) ParameterCount() uint64 {
 	return kv.u64("general.parameter_count")
 }
 
-func (kv kv) FileType() string {
+func (kv KV) FileType() string {
 	if u64 := kv.u64("general.file_type"); u64 > 0 {
 		return fileType(uint32(u64))
 	}
@@ -125,19 +125,19 @@ func (kv kv) FileType() string {
 	return "unknown"
 }
 
-func (kv kv) BlockCount() uint64 {
+func (kv KV) BlockCount() uint64 {
 	return kv.u64(fmt.Sprintf("%s.block_count", kv.Architecture()))
 }
 
-func (kv kv) HeadCount() uint64 {
+func (kv KV) HeadCount() uint64 {
 	return kv.u64(fmt.Sprintf("%s.attention.head_count", kv.Architecture()))
 }
 
-func (kv kv) HeadCountKV() uint64 {
+func (kv KV) HeadCountKV() uint64 {
 	return kv.u64(fmt.Sprintf("%s.attention.head_count_kv", kv.Architecture()))
 }
 
-func (kv kv) GQA() uint64 {
+func (kv KV) GQA() uint64 {
 	if headCountKV := kv.HeadCountKV(); headCountKV > 0 {
 		return kv.HeadCount() / headCountKV
 	}
@@ -145,11 +145,11 @@ func (kv kv) GQA() uint64 {
 	return 0
 }
 
-func (kv kv) EmbeddingLength() uint64 {
+func (kv KV) EmbeddingLength() uint64 {
 	return kv.u64(fmt.Sprintf("%s.embedding_length", kv.Architecture()))
 }
 
-func (kv kv) ContextLength() uint64 {
+func (kv KV) ContextLength() uint64 {
 	return kv.u64(fmt.Sprintf("%s.embedding_length", kv.Architecture()))
 }
 
@@ -231,7 +231,7 @@ func (t tensor) size() uint64 {
 }
 
 type model interface {
-	KV() kv
+	KV() KV
 	Tensor() []tensor
 }
 

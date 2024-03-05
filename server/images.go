@@ -21,6 +21,7 @@ import (
 	"text/template"
 
 	"github.com/jmorganca/ollama/api"
+	"github.com/jmorganca/ollama/format"
 	"github.com/jmorganca/ollama/llm"
 	"github.com/jmorganca/ollama/parser"
 	"github.com/jmorganca/ollama/version"
@@ -48,10 +49,65 @@ type Model struct {
 	Size           int64
 	Options        map[string]interface{}
 	Messages       []Message
+	kvs            map[string]llm.KV
 }
 
-func (m *Model) IsEmbedding() bool {
+func (m *Model) embedding() bool {
+	for _, family := range m.Families() {
+		switch family {
+		case "bert", "nomic-bert":
+			return true
+		}
+	}
+
 	return false
+}
+
+func (m *Model) Families() []string {
+	var modelFamilies []string
+	for _, kv := range m.kvs {
+		modelFamilies = append(modelFamilies, kv.Architecture())
+	}
+
+	if len(modelFamilies) != 0 {
+		return modelFamilies
+	}
+
+	return m.Config.ModelFamilies
+}
+
+// Type is the parameter count as a human readable string, e.g. 1B, 3B, 7B
+func (m *Model) Type() string {
+	var parameters uint64
+	for digest, kv := range m.kvs {
+		if digest == filepath.Base(m.ModelPath) {
+			parameters = kv.ParameterCount()
+			break
+		}
+	}
+
+	if parameters > 0 {
+		return format.HumanNumber(parameters)
+	}
+
+	return m.Config.ModelType
+}
+
+// FileType is the model's quantization type, e.g. F16, F32, q4_0, q5_K_M
+func (m *Model) FileType() string {
+	var filetype string
+	for digest, kv := range m.kvs {
+		if digest == filepath.Base(m.ModelPath) {
+			filetype = kv.FileType()
+			break
+		}
+	}
+
+	if filetype != "" {
+		return filetype
+	}
+
+	return m.Config.FileType
 }
 
 type Message struct {
@@ -71,6 +127,13 @@ type ConfigV2 struct {
 	Architecture string `json:"architecture"`
 	OS           string `json:"os"`
 	RootFS       RootFS `json:"rootfs"`
+
+	// deprecated
+	ModelFormat   string   `json:"model_format"`
+	ModelFamily   string   `json:"model_family"`
+	ModelFamilies []string `json:"model_families"`
+	ModelType     string   `json:"model_type"`
+	FileType      string   `json:"file_type"`
 }
 
 type RootFS struct {
@@ -122,12 +185,12 @@ func GetModel(name string) (*Model, error) {
 	}
 
 	model := &Model{
+		Digest:    digest,
 		Name:      mp.GetFullTagname(),
 		ShortName: mp.GetShortTagname(),
-		Digest:    digest,
 		Template:  "{{ .Prompt }}",
-		License:   []string{},
 		Size:      manifest.GetTotalSize(),
+		kvs:       make(map[string]llm.KV),
 	}
 
 	filename, err := GetBlobsPath(manifest.Config.Digest)
@@ -155,6 +218,23 @@ func GetModel(name string) (*Model, error) {
 		case "application/vnd.ollama.image.model":
 			model.ModelPath = filename
 			model.ParentModel = layer.From
+		case "application/vnd.ollama.image.model+json", "application/vnd.ollama.image.projector+json":
+			file, err := os.Open(filename)
+			if err != nil {
+				return nil, err
+			}
+			defer file.Close()
+
+			var metadata struct {
+				Ref string `json:"ref"`
+				KV  llm.KV `json:"kv"`
+			}
+
+			if err = json.NewDecoder(file).Decode(&metadata); err != nil {
+				return nil, err
+			}
+
+			model.kvs[metadata.Ref] = metadata.KV
 		case "application/vnd.ollama.image.embed":
 			// Deprecated in versions  > 0.1.2
 			// TODO: remove this warning in a future version

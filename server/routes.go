@@ -191,7 +191,7 @@ func GenerateHandler(c *gin.Context) {
 		return
 	}
 
-	if model.IsEmbedding() {
+	if model.embedding() {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "embedding models do not support generate"})
 		return
 	}
@@ -713,15 +713,6 @@ func GetModelInfo(req api.ShowRequest) (*api.ShowResponse, error) {
 		return nil, err
 	}
 
-	modelDetails := api.ModelDetails{
-		ParentModel:       model.ParentModel,
-		// Format:            model.Config.ModelFormat,
-		// Family:            model.Config.ModelFamily,
-		// Families:          model.Config.ModelFamilies,
-		// ParameterSize:     model.Config.ModelType,
-		// QuantizationLevel: model.Config.FileType,
-	}
-
 	if req.System != "" {
 		model.System = req.System
 	}
@@ -739,8 +730,13 @@ func GetModelInfo(req api.ShowRequest) (*api.ShowResponse, error) {
 		License:  strings.Join(model.License, "\n"),
 		System:   model.System,
 		Template: model.Template,
-		Details:  modelDetails,
 		Messages: msgs,
+		Details: api.ModelDetails{
+			ParentModel:       model.ParentModel,
+			Families:          model.Families(),
+			ParameterSize:     model.Type(),
+			QuantizationLevel: model.FileType(),
+		},
 	}
 
 	var params []string
@@ -787,20 +783,16 @@ func ListModelsHandler(c *gin.Context) {
 			return api.ModelResponse{}, err
 		}
 
-		modelDetails := api.ModelDetails{
-			// Format:            model.Config.ModelFormat,
-			// Family:            model.Config.ModelFamily,
-			// Families:          model.Config.ModelFamilies,
-			// ParameterSize:     model.Config.ModelType,
-			// QuantizationLevel: model.Config.FileType,
-		}
-
 		return api.ModelResponse{
-			Model:   model.ShortName,
-			Name:    model.ShortName,
-			Size:    model.Size,
-			Digest:  model.Digest,
-			Details: modelDetails,
+			Model:  model.ShortName,
+			Name:   model.ShortName,
+			Size:   model.Size,
+			Digest: model.Digest,
+			Details: api.ModelDetails{
+				Families:          model.Families(),
+				ParameterSize:     model.Type(),
+				QuantizationLevel: model.FileType(),
+			},
 		}, nil
 	}
 
@@ -1150,7 +1142,7 @@ func ChatHandler(c *gin.Context) {
 		return
 	}
 
-	if model.IsEmbedding() {
+	if model.embedding() {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "embedding models do not support chat"})
 		return
 	}

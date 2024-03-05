@@ -61,7 +61,7 @@ const (
 type modelGGUF struct {
 	*containerGGUF
 
-	kv
+	kv      KV
 	tensors []tensor
 
 	parameters uint64
@@ -70,11 +70,11 @@ type modelGGUF struct {
 func newModelGGUF(container *containerGGUF) *modelGGUF {
 	return &modelGGUF{
 		containerGGUF: container,
-		kv:            make(kv),
+		kv:            make(KV),
 	}
 }
 
-func (llm *modelGGUF) KV() kv {
+func (llm *modelGGUF) KV() KV {
 	return llm.kv
 }
 
