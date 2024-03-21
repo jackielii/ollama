@@ -431,7 +431,10 @@ func (d *Duration) UnmarshalJSON(b []byte) (err error) {
 }
 
 func (d Duration) MarshalJSON() ([]byte, error) {
-	return json.Marshal(d.Duration)
+	if d.Duration < 0 {
+		return []byte("-1"), nil
+	}
+	return []byte("\"" + d.Duration.String() + "\""), nil
 }
 
 // FormatParams converts specified parameter options to their correct types
