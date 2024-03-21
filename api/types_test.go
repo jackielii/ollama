@@ -48,3 +48,15 @@ func TestKeepAliveParsingFromJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestDurationMarshalUnmarshal(t *testing.T) {
+	d := &Duration{Duration: -1}
+	b, err := json.Marshal(d)
+	require.NoError(t, err)
+	assert.Equal(t, `-1`, string(b))
+
+	var d2 Duration
+	err = json.Unmarshal(b, &d2)
+	require.NoError(t, err)
+	assert.Equal(t, &Duration{time.Duration(math.MaxInt64)}, &d2)
+}

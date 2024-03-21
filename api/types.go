@@ -430,6 +430,10 @@ func (d *Duration) UnmarshalJSON(b []byte) (err error) {
 	return nil
 }
 
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(d.Duration)
+}
+
 // FormatParams converts specified parameter options to their correct types
 func FormatParams(params map[string][]string) (map[string]interface{}, error) {
 	opts := Options{}
